@@ -92,41 +92,6 @@ def compute_standings_with_bylaws(df, sanctioned_teams=None):
     return standings
 
 
-def head_to_head_bylaws(df, tied_teams):
-    subset = df[df["Local"].isin(tied_teams) & df["Visitor"].isin(tied_teams)]
-    match_counts = subset.groupby(["Local", "Visitor"]).size().reset_index(name="count")
-    pair_counts = {}
-
-    for _, row in match_counts.iterrows():
-        pair = tuple(sorted([row["Local"], row["Visitor"]]))
-        pair_counts[pair] = pair_counts.get(pair, 0) + row["count"]
-
-    if not all(count >= 2 for count in pair_counts.values()):
-        return None
-
-    h2h_stats = {team: {"W": 0, "PF": 0, "PA": 0} for team in tied_teams}
-
-    for _, row in subset.iterrows():
-        if np.isnan(row["HomeWin"]):
-            continue
-        home, away = row["Local"], row["Visitor"]
-        hs, rs = row["HomeScore"], row["RoadScore"]
-
-        h2h_stats[home]["PF"] += hs
-        h2h_stats[home]["PA"] += rs
-        h2h_stats[away]["PF"] += rs
-        h2h_stats[away]["PA"] += hs
-
-        if row["HomeWin"] == 1:
-            h2h_stats[home]["W"] += 1
-        else:
-            h2h_stats[away]["W"] += 1
-
-    df_h2h = pd.DataFrame.from_dict(h2h_stats, orient="index")
-    df_h2h["Diff"] = df_h2h["PF"] - df_h2h["PA"]
-    return df_h2h.sort_values(by=["W", "Diff", "PF"], ascending=False)
-
-
 def resolve_tiebreakers_with_bylaws(df, sanctioned_teams=None):
     standings = compute_standings_with_bylaws(df, sanctioned_teams)
     df_stand = pd.DataFrame.from_dict(standings, orient="index")
@@ -134,7 +99,6 @@ def resolve_tiebreakers_with_bylaws(df, sanctioned_teams=None):
     df_stand["Total"] = df_stand["W"] + df_stand["L"]
     df_stand = df_stand.reset_index().rename(columns={"index": "Team"})
 
-    # Map acronyms to full club names
     name_map = {}
     for _, row in df.iterrows():
         name_map[row["Local"]] = row["Local_Name"]
@@ -147,7 +111,6 @@ def resolve_tiebreakers_with_bylaws(df, sanctioned_teams=None):
 
 
 def generate_txt_string(df_standings, label="A"):
-    """Versión modificada que devuelve string, no archivo"""
     df = df_standings.copy()
     if "Rank" not in df.columns:
         df["Rank"] = df.reset_index().index + 1
@@ -167,40 +130,57 @@ def generate_txt_string(df_standings, label="A"):
 # ---------------- STREAMLIT INTERFACE ----------------
 # =====================================================
 
-st.set_page_config(page_title="Euroleague & Eurocup Standings", layout="wide")
-st.title("🏀 Euroleague & Eurocup Standings Generator")
+st.set_page_config(page_title="Euroleague Standings Generator", layout="wide")
+st.title("🏀 Euroleague Standings Generator (Editable)")
 
-tab1, tab2 = st.tabs(["EuroLeague", "EuroCup"])
+st.header("EuroLeague Standings")
 
-# ----------- TAB EUROLEAGUE -----------
-with tab1:
-    st.header("EuroLeague Standings")
-    if st.button("Generate EuroLeague Standings"):
-        df, sanctioned = actual_calendar_EL()
-        standings = resolve_tiebreakers_with_bylaws(df, sanctioned)
-        txt_output = generate_txt_string(standings, label="EL")
+# Obtener datos iniciales
+df, sanctioned = actual_calendar_EL()
 
-        st.success("✅ Standings generated successfully!")
-        st.text_area("EuroLeague Standings (.txt format):", txt_output, height=500)
+# Opción de mostrar solo partidos sin resultado
+show_all = st.checkbox("Mostrar todos los partidos (no solo los incompletos)", value=False)
+
+if not show_all:
+    df_edit = df[df["HomeWin"].isna()].copy()
+else:
+    df_edit = df.copy()
+
+st.markdown("### Introduce o modifica los resultados manualmente")
+st.markdown("_Rellena HomeScore, RoadScore y selecciona el ganador (Local o Visitor)_")
+
+# Añadir columna de ganador
+df_edit["Winner"] = np.where(df_edit["HomeWin"] == 1, "Local",
+                      np.where(df_edit["RoadWin"] == 1, "Visitor", ""))
+
+editable = st.data_editor(
+    df_edit[["Round", "Local", "Visitor", "HomeScore", "RoadScore", "Winner"]],
+    num_rows="dynamic",
+    use_container_width=True,
+    key="editor"
+)
+
+# Actualizar DataFrame con valores editados
+for idx, row in editable.iterrows():
+    mask = (df["Local"] == row["Local"]) & (df["Visitor"] == row["Visitor"]) & (df["Round"] == row["Round"])
+    if not row["Winner"]:
+        continue
+    df.loc[mask, "HomeScore"] = row["HomeScore"]
+    df.loc[mask, "RoadScore"] = row["RoadScore"]
+    if row["Winner"] == "Local":
+        df.loc[mask, "HomeWin"] = 1
+        df.loc[mask, "RoadWin"] = 0
+    elif row["Winner"] == "Visitor":
+        df.loc[mask, "HomeWin"] = 0
+        df.loc[mask, "RoadWin"] = 1
+    df.loc[mask, "PlusMinus"] = row["HomeScore"] - row["RoadScore"]
+
+# Botón para generar standings
+if st.button("Generate EuroLeague Standings"):
+    standings = resolve_tiebreakers_with_bylaws(df, sanctioned)
+    txt_output = generate_txt_string(standings, label="EL")
+
+    st.success("✅ Standings generated successfully!")
+    st.text_area("EuroLeague Standings (.txt format):", txt_output, height=500)
 
 
-# ----------- TAB EUROCUP -----------
-from standingsEC import eurocup_calendar_2025, resolve_tiebreakers_with_bylaws as resolve_ec, generate_txt_standings_output
-
-with tab2:
-    st.header("EuroCup Standings")
-    if st.button("Generate EuroCup Standings"):
-        df_a, df_b = eurocup_calendar_2025()
-
-        standings_a = resolve_ec(df_a)
-        standings_b = resolve_ec(df_b)
-
-        txt_a = generate_txt_string(standings_a, label="A")
-        txt_b = generate_txt_string(standings_b, label="B")
-
-        st.success("✅ EuroCup standings generated!")
-        subtab1, subtab2 = st.tabs(["Group A", "Group B"])
-        with subtab1:
-            st.text_area("EuroCup Group A (.txt format):", txt_a, height=500)
-        with subtab2:
-            st.text_area("EuroCup Group B (.txt format):", txt_b, height=500)
