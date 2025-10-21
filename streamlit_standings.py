@@ -146,24 +146,34 @@ if not show_all:
 else:
     df_edit = df.copy()
 
-st.markdown("### Introduce o modifica los resultados manualmente")
-st.markdown("_Rellena HomeScore, RoadScore y selecciona el ganador (Local o Visitor)_")
+# Ordenar por Round ascendente
+df_edit = df_edit.sort_values(by="Round", ascending=True).reset_index(drop=True)
 
-# Añadir columna de ganador
+# Añadir columna de ganador (si existe)
 df_edit["Winner"] = np.where(df_edit["HomeWin"] == 1, "Local",
                       np.where(df_edit["RoadWin"] == 1, "Visitor", ""))
 
+st.markdown("### Introduce o modifica los resultados manualmente")
+st.markdown("_Rellena HomeScore, RoadScore y selecciona el ganador (Local o Visitor)_")
+
+# Tabla editable sin índice y con validación de opciones
 editable = st.data_editor(
     df_edit[["Round", "Local", "Visitor", "HomeScore", "RoadScore", "Winner"]],
     num_rows="dynamic",
     use_container_width=True,
+    hide_index=True,
+    column_config={
+        "Winner": st.column_config.SelectboxColumn(
+            "Winner", options=["Local", "Visitor"], required=False
+        )
+    },
     key="editor"
 )
 
 # Actualizar DataFrame con valores editados
-for idx, row in editable.iterrows():
+for _, row in editable.iterrows():
     mask = (df["Local"] == row["Local"]) & (df["Visitor"] == row["Visitor"]) & (df["Round"] == row["Round"])
-    if not row["Winner"]:
+    if pd.isna(row["HomeScore"]) or pd.isna(row["RoadScore"]) or not row["Winner"]:
         continue
     df.loc[mask, "HomeScore"] = row["HomeScore"]
     df.loc[mask, "RoadScore"] = row["RoadScore"]
@@ -182,5 +192,7 @@ if st.button("Generate EuroLeague Standings"):
 
     st.success("✅ Standings generated successfully!")
     st.text_area("EuroLeague Standings (.txt format):", txt_output, height=500)
+
+
 
 
